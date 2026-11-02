@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://attractoragents.com/schemas/agent-spec.json",
+  "title": "Especificación de agente de Attractor",
+  "description": "Fuente de verdad de un agente. apply-agent.mjs la crea o la sincroniza con la plataforma.",
+  "type": "object",
+  "required": ["name", "objective"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "type": "string", "minLength": 3, "description": "Nombre del agente. Es la llave: si ya existe en el workspace, se actualiza." },
+    "description": { "type": "string" },
+    "objective": { "type": "string", "minLength": 1, "description": "Qué debe lograr el agente, en una o dos frases." },
+    "instructions": { "type": "string", "description": "System prompt: rol, capacidades, reglas y formato de salida." },
+    "tone": { "type": "string" },
+    "language": { "type": "string", "default": "es" },
+    "constraints": { "type": "string", "description": "Lo que nunca debe hacer." },
+    "initial_message": { "type": "string" },
+    "scope_guard": { "type": "boolean", "default": true, "description": "Se niega a temas fuera de su objetivo." },
+    "conversation_close_minutes": { "type": "integer", "minimum": 1, "default": 10 },
+    "max_tokens": { "type": "integer", "minimum": 64, "default": 1024 },
+
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "{provider, name} o {code}. Sin modelo se usa el primero del primer proveedor.",
+      "properties": {
+        "provider": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string", "format": "uuid" }
+      }
+    },
+    "temperature": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+    "timezone": { "type": "string", "default": "America/Guayaquil" },
+
+    "knowledge_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "KB nueva (name + contenido) o existente (code). Archivos y textos van completos al contexto (~60.000 caracteres en total); artículos se buscan por fragmentos.",
+      "properties": {
+        "code": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 2 },
+        "description": { "type": "string" },
+        "files": { "type": "array", "items": { "type": "string", "pattern": "\\.(pdf|docx|txt|md|html?)$" } },
+        "texts": { "type": "array", "items": { "$ref": "#/$defs/titledText" } },
+        "articles": { "type": "array", "items": { "$ref": "#/$defs/titledText" } }
+      }
+    },
+
+    "tools": {
+      "type": "array",
+      "description": "Acciones de datos (llamadas HTTP) que el agente puede usar. Se crean o actualizan por nombre.",
+      "items": { "$ref": "#/$defs/tool" }
+    },
+
+    "channel": { "type": "string", "format": "uuid", "description": "Canal donde desplegarlo (GET /api/channel). Sin canal no se despliega." },
+    "publish": { "type": "boolean", "default": true },
+    "http_trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keep": { "type": "boolean", "default": false, "description": "Dejar el disparador HTTP encendido después de las pruebas." }
+      }
+    },
+
+    "tests": {
+      "type": "array",
+      "description": "Casos que se corren contra la versión publicada. Si alguno falla, el script termina con código 2.",
+      "items": { "$ref": "#/$defs/test" }
+    },
+    "test_messages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "deprecated": true,
+      "description": "Formato anterior: mensajes sin expectativa. Usa tests."
+    }
+  },
+
+  "$defs": {
+    "titledText": {
+      "type": "object",
+      "required": ["title", "content"],
+      "additionalProperties": false,
+      "properties": { "title": { "type": "string" }, "content": { "type": "string" } }
+    },
+    "field": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "type": { "enum": ["string", "number", "integer", "boolean", "object", "array"], "default": "string" },
+        "required": { "type": "boolean", "default": false },
+        "description": { "type": "string" }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "required": ["name", "description", "method", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$", "description": "Verbo + objeto: consultar_pedido." },
+        "description": { "type": "string", "minLength": 10, "description": "Cuándo usarla. Se guarda como guía de la herramienta en el prompt." },
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "url": { "type": "string", "pattern": "^https?://" },
+        "input": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+        "output": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "source"],
+            "properties": {
+              "key": { "type": "string" },
+              "source": { "enum": ["literal", "input", "store"] },
+              "value": { "type": "string" },
+              "path": { "type": "string" }
+            }
+          }
+        },
+        "timeout": { "type": "integer", "minimum": 1, "maximum": 300, "default": 10 },
+        "query_strategy": { "enum": ["auto", "query", "body"], "default": "auto" },
+        "permission": { "enum": ["READ", "WRITE", "DELETE", "EXTERNAL_ACTION"], "default": "READ" },
+        "requires_approval": { "type": "boolean", "description": "Por defecto true en DELETE y EXTERNAL_ACTION." },
+        "auth_profile": { "type": "string", "format": "uuid", "description": "Perfil de autenticación ya creado en el panel (Acciones de datos)." }
+      }
+    },
+    "test": {
+      "type": "object",
+      "required": ["message"],
+      "additionalProperties": false,
+      "properties": {
+        "message": { "type": "string" },
+        "expect": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "contains": { "type": "array", "items": { "type": "string" }, "description": "Todas deben aparecer (sin distinguir mayúsculas ni tildes)." },
+            "contains_any": { "type": "array", "items": { "type": "string" }, "description": "Al menos una debe aparecer." },
+            "not_contains": { "type": "array", "items": { "type": "string" } },
+            "matches": { "type": "string", "description": "Expresión regular (flag i)." },
+            "refuses": { "type": "boolean", "description": "true: debe reconocer que no tiene la información o declinar." },
+            "max_chars": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  }
+}

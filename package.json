@@ -1,0 +1,23 @@
+{
+  "name": "attractor-cli",
+  "version": "1.0.0",
+  "description": "Crea y mantiene agentes de Attractor Agents desde una spec.json",
+  "type": "module",
+  "bin": {
+    "attractor": "cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "apply-agent.mjs",
+    "profiles.mjs",
+    "agent-spec.schema.json",
+    "example-spec.json",
+    "skill/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["attractor", "ai-agents", "cli", "chatbot", "spec"],
+  "homepage": "https://attractoragents.com",
+  "license": "MIT"
+}
