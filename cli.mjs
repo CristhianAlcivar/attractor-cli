@@ -10,6 +10,7 @@
 //   attractor logout [<perfil>]        Borra un perfil
 //   attractor apply <spec.json> [--dry-run] [--test-only] [--profile p]
 //   attractor init [carpeta]           Crea spec.json de ejemplo
+//   attractor list [--workspace w] [--search t] [--json] [--profile p]   Lista todos los agentes
 //
 // Sin dependencias: Node 18+.
 
@@ -20,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import readline from "node:readline";
 import {
   CONFIG_FILE, loadConfig, saveConfig, resolveProfile, fetchToken, fetchWorkspaces, normalizeBaseUrl,
+  applyProfileToEnv,
 } from "./profiles.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -32,9 +34,9 @@ const flag = (name) => {
   const a = rest[i];
   return a.includes("=") ? a.slice(a.indexOf("=") + 1) : rest[i + 1];
 };
-const positional = () => rest.filter((a, i) => !a.startsWith("--") && !(i > 0 && /^--(profile|url|client-id)$/.test(rest[i - 1])));
+const positional = () => rest.filter((a, i) => !a.startsWith("--") && !(i > 0 && /^--(profile|url|client-id|search|workspace)$/.test(rest[i - 1])));
 
-const commands = { login, profiles, use, whoami, logout, apply, init, help };
+const commands = { login, profiles, use, whoami, logout, apply, init, list, agents: list, help };
 const run = commands[cmd] || help;
 run().catch((err) => {
   console.error(`✗ ${err.message}`);
@@ -162,6 +164,91 @@ async function apply() {
   child.on("close", (code) => process.exit(code ?? 1));
 }
 
+// Credenciales con la misma prioridad que apply: --profile, variables ATTRACTOR_*, perfil por defecto.
+async function connect() {
+  applyProfileToEnv(flag("profile"));
+  const baseUrl = normalizeBaseUrl(process.env.ATTRACTOR_BASE_URL || "");
+  const clientId = process.env.ATTRACTOR_CLIENT_ID;
+  const clientSecret = process.env.ATTRACTOR_CLIENT_SECRET;
+  if (!baseUrl || !clientId || !clientSecret) throw new Error("No hay credenciales. Conéctate con: attractor login");
+  const { token, organization } = await fetchToken(baseUrl, clientId, clientSecret);
+  const workspaces = await fetchWorkspaces(baseUrl, token, organization);
+  if (!workspaces.length) throw new Error("La organización no tiene workspaces.");
+
+  const api = async (path, workspaceCode) => {
+    const res = await fetch(`${baseUrl}/api${path}`, {
+      headers: { Authorization: `Bearer ${token}`, "X-Workspace-Code": workspaceCode },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.success === false) {
+      throw new Error(`GET /api${path} → ${res.status}: ${body.error?.message || body.error || ""}`);
+    }
+    return body.data ?? body;
+  };
+  return { baseUrl, workspaces, api };
+}
+
+const fold = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
+// Todos los agentes de la organización, recorriendo cada workspace. --workspace limita a uno.
+async function list() {
+  const { baseUrl, workspaces, api } = await connect();
+  const search = flag("search");
+  const only = flag("workspace");
+  const targets = only
+    ? workspaces.filter((w) => w.code === only || fold(w.name) === fold(only))
+    : workspaces;
+  if (!targets.length) {
+    throw new Error(`No existe el workspace "${only}". Disponibles: ${workspaces.map((w) => w.name).join(", ")}`);
+  }
+
+  const rows = [];
+  for (const ws of targets) {
+    const seen = [];
+    for (let page = 1; page <= 50; page++) {
+      const q = `page=${page}&limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`;
+      const data = await api(`/service?${q}`, ws.code);
+      const batch = data.services || data.items || [];
+      seen.push(...batch);
+      const total = Number(data.total ?? seen.length);
+      if (!batch.length || seen.length >= total) break;
+    }
+    for (const s of seen) {
+      rows.push({
+        workspace: ws.name,
+        name: s.name,
+        code: s.code,
+        published: s.publishedVersion ?? null,
+        channels: (s.channels?.length ? s.channels : s.channel ? [s.channel] : [])
+          .map((c) => c?.name || c?.provider || c?.code || c).filter(Boolean),
+      });
+    }
+  }
+  rows.sort((a, b) => a.workspace.localeCompare(b.workspace, "es") || String(a.name).localeCompare(String(b.name), "es"));
+
+  if (rest.includes("--json")) return console.log(JSON.stringify(rows, null, 2));
+
+  const scope = only ? `workspace ${targets[0].name}` : `${targets.length} workspace(s)`;
+  console.log(`${rows.length} agente(s) en ${scope}${search ? ` que coinciden con «${search}»` : ""}`);
+  if (!rows.length) return console.log("\nNo hay agentes. Crea uno con: attractor init  →  attractor apply spec.json");
+  const w = Math.min(40, Math.max(6, ...rows.map((r) => String(r.name).length)));
+  let current = null;
+  for (const r of rows) {
+    if (r.workspace !== current) {
+      current = r.workspace;
+      const count = rows.filter((x) => x.workspace === current).length;
+      console.log(`\n${current} (${count})`);
+      console.log(`  ${"Nombre".padEnd(w)}  ${"Publicado".padEnd(9)}  ${"Código".padEnd(36)}  Canales`);
+    }
+    const pub = r.published == null ? "no" : `v${r.published}`;
+    const name = String(r.name).length > w ? String(r.name).slice(0, w - 1) + "…" : String(r.name);
+    console.log(`  ${name.padEnd(w)}  ${pub.padEnd(9)}  ${String(r.code).padEnd(36)}  ${r.channels.join(", ") || "—"}`);
+  }
+  const empty = targets.filter((ws) => !rows.some((r) => r.workspace === ws.name)).map((ws) => ws.name);
+  if (empty.length && !search) console.log(`\nSin agentes: ${empty.join(", ")}`);
+  console.log(`\nAbrir uno: ${baseUrl}/agents/<código>/playground`);
+}
+
 async function init() {
   const [dir = "."] = positional();
   const target = resolve(dir);
@@ -183,6 +270,8 @@ async function help() {
   attractor use <perfil>                    Cambia el perfil por defecto
   attractor whoami [--profile p]            Comprueba la conexión
   attractor logout [<perfil>]               Borra un perfil
+  attractor list [--workspace w] [--search t] [--json]
+                                            Lista todos los agentes de la organización
   attractor init [carpeta]                  Crea una spec.json de ejemplo
   attractor apply <spec.json> [--dry-run] [--test-only] [--profile p]
 

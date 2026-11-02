@@ -118,7 +118,17 @@ Todos los campos están descritos en [`agent-spec.schema.json`](agent-spec.schem
 - Los **artículos** se parten en fragmentos para buscar en contenido largo.
 - Si la KB ya existe, no se le vuelven a subir documentos: cámbialos desde el panel.
 
-## 4. Aplica
+## 4. Consulta tus agentes
+
+```bash
+attractor list                        # todos los agentes, agrupados por workspace
+attractor list --workspace Ventas     # solo un workspace
+attractor list --search stela --json  # filtrar y obtener JSON
+```
+
+Muestra el nombre, la versión publicada, el código y los canales de cada agente.
+
+## 5. Aplica
 
 ```bash
 attractor apply mi-agente/spec.json --dry-run   # qué crearía o cambiaría; no escribe nada

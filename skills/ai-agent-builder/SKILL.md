@@ -1,6 +1,6 @@
 ---
 name: ai-agent-builder
-description: Diseña agentes de IA de Attractor (prompt, herramientas, base de conocimiento, pruebas) y los crea o actualiza con la CLI attractor. Úsalo al pedir crear, mejorar o cambiar un agente.
+description: Crea, lista, revisa y actualiza agentes de IA de Attractor con la CLI attractor (spec, herramientas, KB, pruebas). Úsalo si piden ver o listar sus agentes, o crear, mejorar o cambiar uno.
 ---
 
 # AI Agent Builder
@@ -129,6 +129,20 @@ Un agente sin evaluación no se puede mejorar. Antes de darlo por terminado:
 - Escribe un puñado de casos de prueba que cubran el camino feliz, un caso límite y un caso de fallo.
 - Define métricas acordes al criterio de éxito de la Fase 1 (¿respondió correcto?, ¿usó la herramienta adecuada?, ¿respetó el formato?).
 - Prueba los guardrails explícitamente: intenta que el agente haga lo que no debe y confirma que se niega.
+
+## Consultar los agentes que ya existen
+
+Cuando la persona pregunte por sus agentes («lista mis agentes», «qué agentes tengo», «¿existe
+Stela?»), se refiere a los agentes de **Attractor**, no a los subagentes del asistente. Corre:
+
+- `attractor list`: todos los agentes de la organización, agrupados por workspace, con versión
+  publicada y canales.
+- `attractor list --json`: lo mismo en JSON, para trabajar con los datos.
+- `--search <texto>` filtra por nombre; `--workspace <nombre>` limita a un workspace;
+  `--profile <nombre>` elige la empresa si hay varias.
+
+Muestra todos los que devuelva, sin resumir ni omitir. Si falla por credenciales, pide a la
+persona que corra `attractor login` en su terminal.
 
 ## Fase 9 — Aplicarlo en Attractor
 
