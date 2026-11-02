@@ -63,6 +63,22 @@ export function applyProfileToEnv(name) {
   return p.name;
 }
 
+/**
+ * Deja solo la base de la plataforma: acepta "attractoragents.com", "https://…/",
+ * "https://…/api" o la URL completa del token ("https://…/api/oauth/token").
+ */
+export function normalizeBaseUrl(raw) {
+  let s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  let u;
+  try { u = new URL(s); } catch { throw new Error(`URL inválida: ${raw}`); }
+  let path = u.pathname.replace(/\/+$/, "");
+  const apiAt = path.search(/\/api(\/|$)/);
+  if (apiAt >= 0) path = path.slice(0, apiAt);
+  return u.origin + path;
+}
+
 // ---------------------------------------------------------------- Token y workspaces
 
 export async function fetchToken(baseUrl, clientId, clientSecret) {
@@ -76,7 +92,10 @@ export async function fetchToken(baseUrl, clientId, clientSecret) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body.access_token) {
-    throw new Error(`No se pudo obtener el token (${res.status}): ${body.error_description || body.error || "respuesta inesperada"}`);
+    const hint = res.status === 404
+      ? ". Revisa la URL: debe ser solo el dominio de la plataforma (p. ej. https://attractoragents.com)"
+      : res.status === 401 ? ". Revisa el client ID y el secret, y que la aplicación API esté activa" : "";
+    throw new Error(`No se pudo obtener el token (${res.status}): ${body.error_description || body.error || body.message || "respuesta inesperada"}${hint}`);
   }
   const claims = JSON.parse(Buffer.from(body.access_token.split(".")[1], "base64url").toString());
   return { token: body.access_token, organization: claims.organization, expiresIn: body.expires_in };

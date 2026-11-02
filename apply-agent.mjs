@@ -26,7 +26,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { applyProfileToEnv } from "./profiles.mjs";
+import { applyProfileToEnv, normalizeBaseUrl } from "./profiles.mjs";
 
 const args = process.argv.slice(2);
 const profileIdx = args.findIndex((a) => a === "--profile" || a.startsWith("--profile="));
@@ -53,7 +53,7 @@ try {
 }
 const spec = JSON.parse(await readFile(specPath, "utf8"));
 
-const BASE = (process.env.ATTRACTOR_BASE_URL || "").replace(/\/+$/, "");
+const BASE = normalizeBaseUrl(process.env.ATTRACTOR_BASE_URL || "");
 const CLIENT_ID = process.env.ATTRACTOR_CLIENT_ID;
 const CLIENT_SECRET = process.env.ATTRACTOR_CLIENT_SECRET;
 const HAS_CREDENTIALS = Boolean(BASE && CLIENT_ID && CLIENT_SECRET);

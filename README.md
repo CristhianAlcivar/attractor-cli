@@ -51,9 +51,10 @@ sola vez.
 attractor login
 ```
 
-Te pide la URL de la plataforma (por defecto `https://attractoragents.com`), el client ID y el
-secret. El secret no se muestra mientras lo escribes. El comando valida la credencial, te deja
-elegir el workspace y guarda un perfil.
+Te pide la URL de la plataforma (por defecto `https://attractoragents.com`; basta el dominio), el
+client ID y el secret. El secret no se muestra mientras lo escribes. El comando valida la
+credencial y guarda un perfil. Si la organización tiene varios workspaces, puedes fijar uno; con
+Enter se usa el workspace por defecto.
 
 | Comando | Qué hace |
 |---|---|

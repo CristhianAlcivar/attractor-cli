@@ -19,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline";
 import {
-  CONFIG_FILE, loadConfig, saveConfig, resolveProfile, fetchToken, fetchWorkspaces,
+  CONFIG_FILE, loadConfig, saveConfig, resolveProfile, fetchToken, fetchWorkspaces, normalizeBaseUrl,
 } from "./profiles.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -51,8 +51,9 @@ async function login() {
   }
 
   console.log("Conectar con Attractor (Administración → Usuarios y permisos → Aplicaciones API)\n");
-  const baseUrl = (flag("url") || (interactive ? await ask(`URL de la plataforma [${DEFAULT_URL}]: `) : "") || DEFAULT_URL)
-    .trim().replace(/\/+$/, "").replace(/\/api$/, "");
+  const baseUrl = normalizeBaseUrl(
+    flag("url") || (interactive ? await ask(`URL de la plataforma [${DEFAULT_URL}]: `) : "") || DEFAULT_URL);
+  console.log(`  · Plataforma: ${baseUrl}`);
   const clientId = (flag("client-id") || await ask("Client ID (atr_…): ")).trim();
   const clientSecret = (process.env.ATTRACTOR_CLIENT_SECRET || await askHidden("Client secret (atrs_…): ")).trim();
   if (!clientId || !clientSecret) throw new Error("Client ID y secret son obligatorios.");
@@ -61,26 +62,27 @@ async function login() {
   const { token, organization } = await fetchToken(baseUrl, clientId, clientSecret);
   console.log("ok");
 
+  // El workspace es opcional: sin elegir, cada comando usa el por defecto de la organización.
   let workspace = null;
-  try {
-    const list = await fetchWorkspaces(baseUrl, token, organization);
-    if (list.length === 1 || !interactive) {
-      workspace = list.find((w) => w.is_default) || list[0] || null;
-    } else if (list.length > 1) {
+  if (interactive) {
+    let list = [];
+    try {
+      list = await fetchWorkspaces(baseUrl, token, organization);
+    } catch {
+      /* sin permiso para listar: se usa el por defecto */
+    }
+    if (list.length > 1) {
       console.log("\nWorkspaces:");
       list.forEach((w, i) => console.log(`  ${i + 1}. ${w.name}${w.is_default ? "  (por defecto)" : ""}`));
-      const def = Math.max(0, list.findIndex((w) => w.is_default)) + 1;
-      const pick = Number((await ask(`Elige uno [${def}]: `)).trim() || def);
-      workspace = list[pick - 1];
-      if (!workspace) throw new Error("Opción inválida.");
+      const answer = (await ask("Fijar uno (opcional) [Enter = el por defecto]: ")).trim();
+      if (answer) {
+        workspace = list[Number(answer) - 1];
+        if (!workspace) throw new Error("Opción inválida.");
+      }
     }
-  } catch (err) {
-    if (err.message === "Opción inválida.") throw err;
-    console.log(`  · ${err.message}`);
-    console.log("  · Guardo el perfil sin workspace: se usará el por defecto. Revisa que el rol pueda leer WORKSPACES.");
   }
 
-  const suggested = slug(flag("profile") || workspace?.name || "default");
+  const suggested = slug(flag("profile") || workspace?.name || new URL(baseUrl).hostname.split(".")[0] || "default");
   const name = slug(flag("profile") || (interactive ? (await ask(`\nNombre del perfil [${suggested}]: `)).trim() : "") || suggested);
   if (cfg.profiles[name] && interactive && !flag("profile")) {
     const yes = (await ask(`Ya existe "${name}". ¿Reemplazarlo? [s/N]: `)).trim().toLowerCase();
