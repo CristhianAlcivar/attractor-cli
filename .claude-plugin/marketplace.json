@@ -1,0 +1,14 @@
+{
+  "name": "attractor",
+  "owner": {
+    "name": "CristhianAlcivar"
+  },
+  "description": "Plugins de Attractor Agents para Claude Code.",
+  "plugins": [
+    {
+      "name": "attractor-cli",
+      "source": "./",
+      "description": "Diseña agentes de Attractor y los crea o actualiza desde una spec.json con la CLI attractor."
+    }
+  ]
+}

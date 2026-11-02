@@ -1,0 +1,10 @@
+{
+  "name": "attractor-cli",
+  "version": "1.0.0",
+  "description": "Diseña agentes de Attractor y los crea o actualiza desde una spec.json con la CLI attractor.",
+  "author": { "name": "CristhianAlcivar" },
+  "homepage": "https://github.com/CristhianAlcivar/attractor-cli",
+  "repository": "https://github.com/CristhianAlcivar/attractor-cli",
+  "license": "MIT",
+  "keywords": ["attractor", "agentes", "ia", "spec"]
+}

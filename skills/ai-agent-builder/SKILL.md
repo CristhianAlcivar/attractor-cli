@@ -1,6 +1,6 @@
 ---
 name: ai-agent-builder
-description: Guía para que un LLM ayude a una persona a diseñar y construir un agente de IA desde cero, y a conectarlo con los componentes de la plataforma (data actions, bases de conocimiento, herramientas MCP y demás). Cubre propósito, system prompt, herramientas, conexión de componentes, memoria y contexto, loop de ejecución, guardrails y evaluación, y además lo crea o actualiza de verdad en Attractor por la API desde una spec.json (acciones de datos, base de conocimiento, prompt, configuración, agente, publicación y pruebas con expectativas) con la CLI `attractor`. Úsalo cuando alguien pida crear, diseñar, estructurar, conectar o mejorar un agente, p. ej. "créame un agente que se llame X y responda con esta base de conocimiento" o "cámbiale las instrucciones al agente X".
+description: Diseña agentes de IA de Attractor (prompt, herramientas, base de conocimiento, pruebas) y los crea o actualiza con la CLI attractor. Úsalo al pedir crear, mejorar o cambiar un agente.
 ---
 
 # AI Agent Builder

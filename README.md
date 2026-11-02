@@ -9,8 +9,8 @@ Crea y mantiene agentes de [Attractor Agents](https://attractoragents.com) desde
   falla, el comando termina con código 2, así que sirve en CI.
 - **Perfiles como la CLI de Genesys.** Te conectas una vez con `attractor login` y eliges la
   empresa con `--profile`.
-- **Incluye un skill** para Claude, Kiro o ChatGPT que te ayuda a diseñar el agente y escribe la
-  spec por ti (`skill/ai-agent-builder`).
+- **Incluye un plugin para Claude** (y el skill para Kiro o ChatGPT) que te ayuda a diseñar el
+  agente y escribe la spec por ti. Ver **Usarlo con Claude**.
 
 Sin dependencias. Requiere Node.js 18 o superior.
 
@@ -150,18 +150,51 @@ ATTRACTOR_CLIENT_SECRET=... attractor login --url https://attractoragents.com --
 # o directamente las variables ATTRACTOR_* y: attractor apply spec.json
 ```
 
-## Usarlo con un asistente de IA
+## Usarlo con Claude
 
-`skill/ai-agent-builder` guía al asistente para diseñar el agente contigo: objetivo,
-instrucciones, herramientas, base de conocimiento, guardrails y pruebas. Al final escribe la
-spec y la aplica con esta CLI.
+El skill `ai-agent-builder` diseña el agente contigo (objetivo, instrucciones, herramientas, base
+de conocimiento, guardrails y pruebas), escribe la `spec.json` y la aplica con esta CLI. Funciona
+con tu suscripción de Claude: no necesitas una llave de API de Anthropic.
 
-- **Claude Code:** copia la carpeta a `~/.claude/skills/ai-agent-builder`.
-- **Kiro:** cópiala a `~/.kiro/skills/`.
-- **ChatGPT y otros:** ver [`platform-usage.md`](skill/ai-agent-builder/references/platform-usage.md).
+### Claude Code (recomendado)
+
+Este repositorio es un plugin de Claude Code. Dentro de una sesión de Claude Code:
+
+```
+/plugin install attractor-cli --marketplace CristhianAlcivar/attractor-cli
+```
+
+En versiones anteriores a la 2.1.275, en dos pasos:
+
+```
+/plugin marketplace add CristhianAlcivar/attractor-cli
+/plugin install attractor-cli@attractor
+```
+
+O desde la terminal: `claude plugin marketplace add CristhianAlcivar/attractor-cli` y
+`claude plugin install attractor-cli@attractor --scope user`.
 
 Luego pídele, por ejemplo: «créame un agente que se llame Stela y responda con estas preguntas
-frecuentes».
+frecuentes». El skill también se puede llamar directamente con `/attractor-cli:ai-agent-builder`.
+Instala también la CLI (sección **Instalación**) y conéctate con `attractor login` en tu
+terminal: Claude la usa para crear el agente.
+
+Para recibir versiones nuevas: `/plugin marketplace update attractor`.
+
+### Claude en la web o en la app de escritorio
+
+1. Descarga [`dist/ai-agent-builder.zip`](dist/ai-agent-builder.zip).
+2. En Claude: **Customize → Skills → + → Create skill → Upload a skill** y sube el ZIP.
+   Según el plan, el menú puede aparecer como **Settings → Capabilities**.
+3. Actívalo y pídele que diseñe tu agente.
+
+En la web, Claude no puede llamar a la API de Attractor porque su entorno solo permite salir a
+ciertos dominios. Te entrega la `spec.json` y tú la aplicas en tu equipo con
+`attractor apply spec.json`.
+
+### Kiro, ChatGPT y otros
+
+Ver [`platform-usage.md`](skills/ai-agent-builder/references/platform-usage.md).
 
 ## Qué no cubre todavía
 

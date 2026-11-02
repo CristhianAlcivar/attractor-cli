@@ -12,7 +12,8 @@
     "profiles.mjs",
     "agent-spec.schema.json",
     "example-spec.json",
-    "skill/"
+    "skills/",
+    ".claude-plugin/"
   ],
   "engines": {
     "node": ">=18"

@@ -6,13 +6,23 @@ verdad, el modelo usa la CLI `attractor` de este repositorio (instálala antes).
 
 ## Claude Code
 
-Copia la carpeta `skill/ai-agent-builder` a una de estas rutas:
+Instálalo como plugin (este repositorio es un marketplace):
 
-- `~/.claude/skills/ai-agent-builder`: disponible en todos tus proyectos.
-- `<tu-proyecto>/.claude/skills/ai-agent-builder`: solo en ese proyecto.
+```
+/plugin install attractor-cli --marketplace CristhianAlcivar/attractor-cli
+```
+
+O copia la carpeta `skills/ai-agent-builder` a `~/.claude/skills/ai-agent-builder` (todos tus
+proyectos) o a `<tu-proyecto>/.claude/skills/ai-agent-builder`.
 
 Claude lo activa cuando el pedido coincide con la `description` del frontmatter
 ("créame un agente…", "cámbiale las instrucciones al agente…").
+
+## Claude en la web o en la app de escritorio
+
+Sube `dist/ai-agent-builder.zip` en **Customize → Skills → Upload a skill**. Ahí Claude no puede
+llamar a la API de Attractor (salida de red restringida): te entrega la `spec.json` y tú corres
+`attractor apply spec.json` en tu equipo.
 
 ## Kiro
 
