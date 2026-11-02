@@ -17,14 +17,14 @@ Sin dependencias. Requiere Node.js 18 o superior.
 ## Instalación
 
 ```bash
-npm install -g github:<organización>/attractor-cli
+npm install -g github:CristhianAlcivar/attractor-cli
 attractor help
 ```
 
 O clonando el repositorio:
 
 ```bash
-git clone https://github.com/<organización>/attractor-cli.git
+git clone https://github.com/CristhianAlcivar/attractor-cli.git
 cd attractor-cli
 npm install -g .
 ```

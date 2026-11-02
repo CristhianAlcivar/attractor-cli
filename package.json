@@ -17,7 +17,20 @@
   "engines": {
     "node": ">=18"
   },
-  "keywords": ["attractor", "ai-agents", "cli", "chatbot", "spec"],
+  "keywords": [
+    "attractor",
+    "ai-agents",
+    "cli",
+    "chatbot",
+    "spec"
+  ],
   "homepage": "https://attractoragents.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CristhianAlcivar/attractor-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CristhianAlcivar/attractor-cli/issues"
+  },
   "license": "MIT"
 }
