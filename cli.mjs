@@ -8,7 +8,8 @@
 //   attractor use <perfil>             Cambia el perfil por defecto
 //   attractor whoami [--profile p]     Comprueba la conexión
 //   attractor logout [<perfil>]        Borra un perfil
-//   attractor apply <spec.json> [--dry-run] [--test-only] [--profile p]
+//   attractor apply <spec.json> [--dry-run] [--test-only] [--runs N] [--voice] [--profile p]
+//   attractor doctor <spec.json> [--profile p]   Revisa la spec contra la plataforma, sin cambiar nada
 //   attractor init [carpeta]           Crea spec.json de ejemplo
 //   attractor list [--workspace w] [--search t] [--json] [--profile p]   Lista todos los agentes
 //
@@ -34,9 +35,9 @@ const flag = (name) => {
   const a = rest[i];
   return a.includes("=") ? a.slice(a.indexOf("=") + 1) : rest[i + 1];
 };
-const positional = () => rest.filter((a, i) => !a.startsWith("--") && !(i > 0 && /^--(profile|url|client-id|search|workspace)$/.test(rest[i - 1])));
+const positional = () => rest.filter((a, i) => !a.startsWith("--") && !(i > 0 && /^--(profile|url|client-id|search|workspace|runs)$/.test(rest[i - 1])));
 
-const commands = { login, profiles, use, whoami, logout, apply, init, list, agents: list, help };
+const commands = { login, profiles, use, whoami, logout, apply, doctor, init, list, agents: list, help };
 const run = commands[cmd] || help;
 run().catch((err) => {
   console.error(`✗ ${err.message}`);
@@ -159,8 +160,14 @@ async function logout() {
 }
 
 async function apply() {
-  if (!positional().length) throw new Error("Uso: attractor apply <spec.json> [--dry-run] [--test-only] [--profile p]");
+  if (!positional().length) throw new Error("Uso: attractor apply <spec.json> [--dry-run] [--test-only] [--runs N] [--voice] [--profile p]");
   const child = spawn(process.execPath, [join(HERE, "apply-agent.mjs"), ...rest], { stdio: "inherit" });
+  child.on("close", (code) => process.exit(code ?? 1));
+}
+
+async function doctor() {
+  if (!positional().length) throw new Error("Uso: attractor doctor <spec.json> [--profile p]");
+  const child = spawn(process.execPath, [join(HERE, "doctor.mjs"), ...rest], { stdio: "inherit" });
   child.on("close", (code) => process.exit(code ?? 1));
 }
 
@@ -273,7 +280,10 @@ async function help() {
   attractor list [--workspace w] [--search t] [--json]
                                             Lista todos los agentes de la organización
   attractor init [carpeta]                  Crea una spec.json de ejemplo
-  attractor apply <spec.json> [--dry-run] [--test-only] [--profile p]
+  attractor apply <spec.json> [--dry-run] [--test-only] [--runs N] [--voice] [--profile p]
+  attractor doctor <spec.json> [--profile p]
+                                            Revisa agente, disparador, acciones, tablas e
+                                            integraciones sin cambiar nada
 
 Credenciales: con --profile manda ese perfil. Sin él: variables ATTRACTOR_*, .env junto a la
 spec, ATTRACTOR_PROFILE o el perfil por defecto (${CONFIG_FILE}).`);
