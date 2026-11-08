@@ -31,6 +31,7 @@ import {
   createClient, tokenOrganization, readService, serviceBody, findServiceByName as findService,
   configurationCodeOf,
 } from "./lib/api.mjs";
+import { writeVerified, mergeIntegrations } from "./lib/write.mjs";
 
 const args = process.argv.slice(2);
 const profileIdx = args.findIndex((a) => a === "--profile" || a.startsWith("--profile="));
@@ -72,6 +73,7 @@ const PROMPT_DEFAULTS = {
   scope_guard: true, conversation_close_minutes: 10,
 };
 const NEW = "(nuevo)";
+const WRITE_VERIFY_DELAY_MS = Number(process.env.ATTRACTOR_VERIFY_DELAY_MS ?? 2000);
 
 validateSpec(spec);
 const TESTS = normalizeTests(spec);
@@ -107,6 +109,10 @@ async function mutate(description, fn) {
   log(`✓ ${description}`);
   return out;
 }
+
+// Escritura + relectura: la API a veces responde 400/500 y sí guarda, o tarda en reflejarlo.
+const verified = (label, write, read, expected) =>
+  writeVerified({ label, write, read, expected, log, delayMs: WRITE_VERIFY_DELAY_MS });
 
 // ---------------------------------------------------------------- Lecturas
 
@@ -363,7 +369,14 @@ async function updatePrompt(promptCode, dataActionCodes) {
   }
 
   const body = {};
-  if (diffs.length) body.answers = nextAnswers;
+  const expected = {};
+  if (diffs.length) {
+    body.answers = nextAnswers;
+    // Se verifica solo lo que la spec cambió: el backend puede normalizar el resto.
+    expected.answers = Object.fromEntries(Object.keys(wanted)
+      .filter((k) => JSON.stringify(answers[k]) !== JSON.stringify(nextAnswers[k]))
+      .map((k) => [k, nextAnswers[k]]));
+  }
 
   if (dataActionCodes) {
     const have = (current.dataactions || []).map((d) => d.code ?? d).sort();
@@ -371,19 +384,23 @@ async function updatePrompt(promptCode, dataActionCodes) {
     if (JSON.stringify(have) !== JSON.stringify(want)) {
       diffs.push(`herramientas (${have.length} → ${want.length})`);
       body.dataactions = want.filter((c) => c !== NEW);
+      expected.dataactions = body.dataactions;
     }
   }
   if (spec.max_tokens !== undefined && Number(current.max_tokens) !== spec.max_tokens) {
     diffs.push("max_tokens");
     body.max_tokens = spec.max_tokens;
+    expected.max_tokens = spec.max_tokens;
   }
 
   if (!diffs.length) {
     log("· Prompt: sin cambios");
     return false;
   }
-  await mutate(`Prompt: actualizar ${diffs.join(", ")}`, () =>
-    api("PUT", `/prompt/${promptCode}`, { json: body }));
+  await mutate(`Prompt: actualizar ${diffs.join(", ")}`, () => verified("Prompt",
+    () => api("PUT", `/prompt/${promptCode}`, { json: body }),
+    () => api("GET", `/prompt/${promptCode}`),
+    expected));
   return true;
 }
 
@@ -432,12 +449,31 @@ async function updateConfiguration(cfg) {
     log("· Configuración: sin cambios");
     return false;
   }
-  await mutate(`Configuración: actualizar ${diffs.join(", ")}`, () =>
-    api("PUT", `/configuration/${cfg.code}`, { json: next }));
+  await mutate(`Configuración: actualizar ${diffs.join(", ")}`, () => verified("Configuración",
+    () => api("PUT", `/configuration/${cfg.code}`, { json: next }),
+    () => api("GET", `/configuration/${cfg.code}`),
+    { model: { code: next.model }, temperature: next.temperature, timezone: next.timezone }));
   return true;
 }
 
 // ---------------------------------------------------------------- Agente (servicio)
+
+// PUT /service con relectura. `patch.integrations` es un cambio parcial: se combina con lo
+// guardado (el backend reemplaza el objeto entero) y se conserva http_trigger.
+async function putService(service, patch) {
+  const body = { ...patch };
+  const expected = {};
+  if (patch.integrations) {
+    body.integrations = mergeIntegrations(service.integrations, patch.integrations);
+    expected.integrations = patch.integrations;
+  }
+  if (patch.description !== undefined) expected.description = patch.description;
+  if (patch.kbs) expected.kbs = patch.kbs;
+  return verified("Agente",
+    () => api("PUT", `/service/${service.code}`, { json: serviceBody(service, body) }),
+    () => readService(api, service.code),
+    expected);
+}
 
 async function createService(configurationCode, kbs) {
   const data = await mutate(`Agente "${spec.name}": crear${spec.channel ? " y desplegar en el canal" : ""}`, () =>
@@ -477,8 +513,7 @@ async function updateService(service, kbs) {
     log("· Agente: sin cambios");
     return false;
   }
-  await mutate(`Agente: actualizar ${diffs.join(", ")}`, () =>
-    api("PUT", `/service/${service.code}`, { json: serviceBody(service, patch) }));
+  await mutate(`Agente: actualizar ${diffs.join(", ")}`, () => putService(service, patch));
   return true;
 }
 
@@ -498,18 +533,14 @@ async function ensureTrigger(serviceCode) {
   }
   const token = String(current?.token || "").length >= 16 ? current.token : randomBytes(24).toString("hex");
   const trigger = { enabled: true, token, response_mode: "sync" };
-  await api("PUT", `/service/${serviceCode}`, {
-    json: serviceBody(service, { integrations: { ...(service.integrations || {}), http_trigger: trigger } }),
-  });
+  await putService(service, { integrations: { http_trigger: trigger } });
   log("· Disparador HTTP encendido para las pruebas");
   return { token, restore: spec.http_trigger?.keep ? null : { ...trigger, enabled: false } };
 }
 
 async function disableTrigger(serviceCode, trigger) {
   const service = await readService(api, serviceCode);
-  await api("PUT", `/service/${serviceCode}`, {
-    json: serviceBody(service, { integrations: { ...(service.integrations || {}), http_trigger: trigger } }),
-  });
+  await putService(service, { integrations: { http_trigger: trigger } });
   log("· Disparador HTTP apagado (usa http_trigger.keep para dejarlo encendido)");
 }
 
