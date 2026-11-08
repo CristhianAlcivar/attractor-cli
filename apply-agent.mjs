@@ -33,6 +33,7 @@ import {
 } from "./lib/api.mjs";
 import { writeVerified, mergeIntegrations } from "./lib/write.mjs";
 import { validateIntegrationsSpec, resolveIntegrations, diffIntegrations } from "./lib/integrations.mjs";
+import { applyDataTables, loadTable, validateDataTablesSpec } from "./lib/tables.mjs";
 
 const args = process.argv.slice(2);
 const profileIdx = args.findIndex((a) => a === "--profile" || a.startsWith("--profile="));
@@ -326,7 +327,7 @@ function specAnswers({ withDefaults }) {
   return out;
 }
 
-async function createPrompt(dataActionCodes) {
+async function createPrompt(dataActionCodes, tableCodes) {
   const body = {
     name: spec.name,
     role: "system",
@@ -347,14 +348,14 @@ async function createPrompt(dataActionCodes) {
       trace_enabled: false,
       hide_ids_from_ai: true,
       knowledge_graph: { enabled: false, context: "" },
-      data_tables: [],
+      data_tables: (tableCodes || []).filter((c) => c !== NEW),
     },
   };
   const data = await mutate(`Prompt "${spec.name}": crear`, () => api("POST", "/prompt", { json: body }));
   return data === NEW ? NEW : findCode(data);
 }
 
-async function updatePrompt(promptCode, dataActionCodes) {
+async function updatePrompt(promptCode, dataActionCodes, tableCodes) {
   const current = await api("GET", `/prompt/${promptCode}`);
   const answers = current.answers || {};
   const wanted = specAnswers({ withDefaults: false });
@@ -376,12 +377,22 @@ async function updatePrompt(promptCode, dataActionCodes) {
     }
   }
 
+  // Tablas de datos: se enlazan en answers.data_tables (lista de códigos).
+  if (tableCodes) {
+    const have = [...(answers.data_tables || [])].map((t) => t?.code ?? t).sort();
+    const want = [...new Set(tableCodes)].filter((c) => c !== NEW).sort();
+    if (JSON.stringify(have) !== JSON.stringify(want) || tableCodes.includes(NEW)) {
+      diffs.push(`tablas de datos (${have.length} → ${new Set(tableCodes).size})`);
+      nextAnswers.data_tables = want;
+    }
+  }
+
   const body = {};
   const expected = {};
   if (diffs.length) {
     body.answers = nextAnswers;
     // Se verifica solo lo que la spec cambió: el backend puede normalizar el resto.
-    expected.answers = Object.fromEntries(Object.keys(wanted)
+    expected.answers = Object.fromEntries([...Object.keys(wanted), "data_tables"]
       .filter((k) => JSON.stringify(answers[k]) !== JSON.stringify(nextAnswers[k]))
       .map((k) => [k, nextAnswers[k]]));
   }
@@ -633,11 +644,14 @@ async function main() {
   } else {
     const dataActionCodes = await applyTools();
     const kbs = await applyKnowledgeBase();
+    const tableCodes = await applyDataTables(spec.data_tables, {
+      api, workspace: WORKSPACE, specDir, mutate, log, NEW, offline: !HAS_CREDENTIALS,
+    }).catch((err) => fail(err.message));
 
     if (!service) {
       log(`· El agente "${spec.name}" no existe: se crea.`);
       const modelCode = await resolveModel();
-      const promptCode = await createPrompt(dataActionCodes);
+      const promptCode = await createPrompt(dataActionCodes, tableCodes);
       const configurationCode = await createConfiguration(modelCode, promptCode);
       serviceCode = await createService(configurationCode, kbs);
       changed = true;
@@ -647,7 +661,7 @@ async function main() {
       const cfg = await api("GET", `/configuration/${configurationCodeOf(service)}`);
       const promptCode = cfg.prompts?.[0]?.code;
       if (!promptCode) fail("La configuración del agente no tiene prompt; revísalo en el panel.");
-      changed = (await updatePrompt(promptCode, dataActionCodes)) || changed;
+      changed = (await updatePrompt(promptCode, dataActionCodes, tableCodes)) || changed;
       changed = (await updateConfiguration(cfg)) || changed;
       changed = (await updateService(service, kbs)) || changed;
       if (dataActionCodes && plan.some((p) => p.startsWith("Acción de datos"))) changed = true;
@@ -701,6 +715,12 @@ function offlinePlan() {
   log("  Con ATTRACTOR_* definidos, la simulación compara contra la plataforma.\n");
   for (const t of spec.tools || []) log(`  → Acción de datos "${t.name}" (${t.method} ${t.url})`);
   log(`  → Base de conocimiento: ${spec.knowledge_base ? describeKb(spec.knowledge_base) : "ninguna"}`);
+  for (const t of spec.data_tables || []) {
+    if (t.code) { log(`  → Tabla de datos existente ${t.code}: enlazar`); continue; }
+    const { columns, rows } = loadTable(t, specDir);
+    log(`  → Tabla de datos "${t.name}" desde ${t.csv}: ${columns.length} columnas, ${rows.length} filas`);
+    for (const c of columns) log(`      · ${c.key} (${c.type}${c.is_key ? ", búsqueda exacta" : ""}) ← «${c.label}»`);
+  }
   log(`  → Prompt "${spec.name}" — objetivo: ${spec.objective}`);
   log(`  → Configuración con el modelo ${JSON.stringify(spec.model || "(primer proveedor)")}`);
   log(`  → Agente "${spec.name}"${spec.channel ? ` desplegado en el canal ${spec.channel}` : ""}`);
@@ -719,7 +739,7 @@ function validateSpec(s) {
   const allowed = new Set([
     "$schema", "name", "description", "objective", "instructions", "tone", "language", "constraints",
     "initial_message", "scope_guard", "conversation_close_minutes", "max_tokens", "model",
-    "temperature", "timezone", "knowledge_base", "tools", "integrations", "channel", "publish", "http_trigger",
+    "temperature", "timezone", "knowledge_base", "data_tables", "tools", "integrations", "channel", "publish", "http_trigger",
     "tests", "test_messages",
   ]);
   for (const k of Object.keys(s)) if (!allowed.has(k)) errors.push(`campo desconocido: ${k}`);
@@ -756,6 +776,7 @@ function validateSpec(s) {
   }
 
   errors.push(...validateIntegrationsSpec(s.integrations));
+  errors.push(...validateDataTablesSpec(s.data_tables, { exists: (f) => existsSync(resolve(specDir, f)) }));
 
   for (const [i, t] of (s.tests || []).entries()) {
     if (!t?.message) errors.push(`tests[${i}]: falta message`);
