@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createClient, readService, readAgent, serviceBody, unwrapService } from "../lib/api.mjs";
+import { createClient, readService, readAgent, serviceBody, unwrapService, withListedFields } from "../lib/api.mjs";
 import { mockFetch, noSleep } from "./mock-fetch.mjs";
 
 const SERVICE = {
@@ -58,6 +58,12 @@ test("serviceBody manda name y configuration del servicio leído", () => {
 
 test("serviceBody falla en vez de mandar un PUT sin name", () => {
   assert.throws(() => serviceBody({ configuration: { code: "c" } }), /sin name/);
+});
+
+test("withListedFields toma publishedVersion del listado (el detalle trae null)", () => {
+  const s = withListedFields({ ...SERVICE, publishedVersion: null }, { code: "srv-1", publishedVersion: 2 });
+  assert.equal(s.publishedVersion, 2);
+  assert.equal(withListedFields({ ...SERVICE, publishedVersion: null }, { publishedVersion: null }).publishedVersion, null);
 });
 
 test("api reintenta con token nuevo tras un 401", async () => {

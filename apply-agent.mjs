@@ -32,8 +32,8 @@ import { basename, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { applyProfileToEnv, normalizeBaseUrl } from "./profiles.mjs";
 import {
-  createClient, tokenOrganization, readService, serviceBody, findServiceByName as findService,
-  configurationCodeOf,
+  createClient, readService, serviceBody, findServiceByName as findService, configurationCodeOf,
+  resolveWorkspace as resolveWs, withListedFields,
 } from "./lib/api.mjs";
 import { writeVerified, mergeIntegrations } from "./lib/write.mjs";
 import { validateIntegrationsSpec, resolveIntegrations, diffIntegrations } from "./lib/integrations.mjs";
@@ -138,22 +138,8 @@ const verified = (label, write, read, expected) =>
 // El panel no muestra el código del workspace: se resuelve por nombre (o el por defecto)
 // con la organización que trae el propio token.
 async function resolveWorkspace() {
-  const wanted = WORKSPACE;
-  const organization = tokenOrganization(client.state.token);
-  WORKSPACE = "";
-  client.state.workspace = "";
-  const data = await api("GET", `/workspaces?org_code=${organization}&page=1&limit=100`);
-  const list = data.workspaces || [];
-  const ws = wanted
-    ? list.find((w) => w.code === wanted || eq(w.name, wanted))
-    : list.find((w) => w.is_default) || list[0];
-  if (!ws) {
-    fail(wanted
-      ? `No existe el workspace "${wanted}". Disponibles: ${list.map((w) => w.name).join(", ")}`
-      : "La organización no tiene workspaces.");
-  }
+  const ws = await resolveWs(client, WORKSPACE).catch((err) => fail(err.message));
   WORKSPACE = ws.code;
-  client.state.workspace = ws.code;
   log(`· Workspace: ${ws.name} (${ws.code})`);
 }
 
@@ -601,6 +587,11 @@ async function triggerTurn(serviceCode, token, message, userId) {
     return { reply: null, error: err.message, startedAt };
   }
   const data = body.data || {};
+  // status "error": el disparador responde un texto genérico («Error interno.»); no es una
+  // respuesta del agente y no debe pasar expectativas como not_contains.
+  if (data.status === "error") {
+    return { reply: null, error: `el agente falló (${data.error || data.reply?.text || "status error"})`, startedAt };
+  }
   return {
     reply: data.reply?.text ?? null,
     error: body.error?.message ?? body.error ?? (data.status === "human_in_charge" ? "un asesor tiene la conversación" : `HTTP ${res.status}`),
@@ -681,7 +672,7 @@ async function main() {
       changed = true;
     } else {
       log(`· El agente "${spec.name}" existe (${service.code}): comparo con la spec.`);
-      service = await readService(api, service.code);
+      service = withListedFields(await readService(api, service.code), service);
       const cfg = await api("GET", `/configuration/${configurationCodeOf(service)}`);
       const promptCode = cfg.prompts?.[0]?.code;
       if (!promptCode) fail("La configuración del agente no tiene prompt; revísalo en el panel.");
