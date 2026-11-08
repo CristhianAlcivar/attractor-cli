@@ -110,7 +110,22 @@
       "description": "Cómo se corren las pruebas.",
       "properties": {
         "runs": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1, "description": "Corridas de la suite (--runs lo sobrescribe). Cada corrida usa una conversación nueva." },
-        "pass_threshold": { "type": "number", "exclusiveMinimum": 0, "default": 0.6667, "description": "Mínimo para que un caso pase: fracción de las corridas (por defecto 2 de 3) o número de corridas." }
+        "pass_threshold": { "type": "number", "exclusiveMinimum": 0, "default": 0.6667, "description": "Mínimo para que un caso pase: fracción de las corridas (por defecto 2 de 3) o número de corridas." },
+        "voice": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Pruebas de voz con Piper (también con --voice). Piper dice el mensaje del cliente; con STT el agente recibe lo que se oyó. La respuesta se revisa para voz (sin markdown, URLs ni emojis) y se mide cuánto dura dicha.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "piper_url": { "type": "string", "pattern": "^https?://", "description": "piper-service. Por defecto PIPER_URL o http://localhost:8100." },
+            "voice": { "type": "string", "description": "Voz o alias de Piper: default, daniela, es-mx…" },
+            "speed": { "type": "number", "exclusiveMinimum": 0, "maximum": 3 },
+            "stt_url_env": { "type": "string", "default": "ATTRACTOR_STT_URL", "description": "Variable con la URL de speech-service (POST /stt). Sin ella el agente recibe el texto original." },
+            "language": { "type": "string", "default": "es-ES", "description": "Idioma del STT." },
+            "out_dir": { "type": "string", "default": "voz-pruebas", "description": "Carpeta (relativa a la spec) donde quedan los WAV." },
+            "strict": { "type": "boolean", "default": true, "description": "false: los problemas para voz son avisos, no fallos." }
+          }
+        }
       }
     },
     "test_messages": {
@@ -201,6 +216,7 @@
             "matches": { "type": "string", "description": "Expresión regular (flag i)." },
             "refuses": { "type": "boolean", "description": "true: debe reconocer que no tiene la información o declinar." },
             "max_chars": { "type": "integer", "minimum": 1 },
+            "max_seconds": { "type": "number", "exclusiveMinimum": 0, "description": "Solo en pruebas de voz: cuánto puede durar la respuesta dicha por Piper." },
             "called_tool": {
               "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1 }],
               "description": "Herramienta(s) que el agente debía usar. Se verifica con las trazas del disparador o, si no las trae, con GET /api/tool-logs; si ninguna está disponible queda como «no verificable» (aviso)."

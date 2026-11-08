@@ -13,6 +13,8 @@
 //   --test-only  No cambia nada: solo corre las pruebas contra la versión publicada.
 //   --runs N     Repite las pruebas N veces; un caso pasa si aprueba pass_threshold de ellas
 //                (por defecto 2 de 3).
+//   --voice      Pruebas de voz con Piper (PIPER_URL, por defecto http://localhost:8100). Con
+//                ATTRACTOR_STT_URL el agente recibe la transcripción del audio.
 //
 // Códigos de salida: 0 todo bien · 1 error · 2 alguna prueba falló o algo no quedó enlazado.
 //
@@ -38,6 +40,7 @@ import { validateIntegrationsSpec, resolveIntegrations, diffIntegrations } from 
 import { applyDataTables, loadTable, validateDataTablesSpec } from "./lib/tables.mjs";
 import { verifyLinks } from "./lib/verify.mjs";
 import { parseArgs } from "./lib/args.mjs";
+import { createVoiceRunner, DEFAULT_PIPER_URL } from "./lib/voice.mjs";
 import { createToolLogLookup, extractToolCalls, runSuite, triggerPlan, DEFAULT_PASS_THRESHOLD } from "./lib/testing.mjs";
 
 const { flags, positional } = parseArgs(process.argv.slice(2), ["profile", "runs"]);
@@ -47,7 +50,7 @@ const DRY_RUN = Boolean(flags["dry-run"]);
 const TEST_ONLY = Boolean(flags["test-only"]);
 
 if (!specPath) {
-  console.error("Uso: node apply-agent.mjs <spec.json> [--dry-run] [--test-only] [--runs N] [--profile <nombre>]");
+  console.error("Uso: node apply-agent.mjs <spec.json> [--dry-run] [--test-only] [--runs N] [--voice] [--profile <nombre>]");
   process.exit(1);
 }
 if (flags.runs !== undefined && !(Number.isInteger(Number(flags.runs)) && Number(flags.runs) >= 1 && Number(flags.runs) <= 10)) {
@@ -607,9 +610,27 @@ async function triggerTurn(serviceCode, token, message, userId) {
   };
 }
 
-async function runTests(serviceCode, token) {
+// Pruebas de voz (--voice o testing.voice.enabled): Piper dice el mensaje y la respuesta.
+function voiceRunner() {
+  const cfg = spec.testing?.voice || {};
+  if (!flags.voice && !cfg.enabled) return null;
+  const sttEnv = cfg.stt_url_env || "ATTRACTOR_STT_URL";
+  return createVoiceRunner({
+    piperUrl: cfg.piper_url || process.env.PIPER_URL || DEFAULT_PIPER_URL,
+    voice: cfg.voice,
+    speed: cfg.speed,
+    sttUrl: process.env[sttEnv] || null,
+    language: cfg.language || "es-ES",
+    outDir: resolve(specDir, cfg.out_dir || "voz-pruebas"),
+    strict: cfg.strict !== false,
+  });
+}
+
+async function runTests(serviceCode, token, voice) {
   const runs = Number(flags.runs ?? spec.testing?.runs ?? 1);
+  if (voice) log(`\n· Pruebas de voz: ${voice.describe()}`);
   const { failed } = await runSuite({
+    voice,
     tests: TESTS,
     runs,
     passThreshold: spec.testing?.pass_threshold ?? DEFAULT_PASS_THRESHOLD,
@@ -706,9 +727,15 @@ async function main() {
     if (!published) {
       log("· Pruebas omitidas: el agente no tiene versión publicada y el disparador usa esa.");
     } else {
+      // Piper se comprueba antes de tocar el disparador: si no responde, no queda encendido.
+      const voice = voiceRunner();
+      if (voice) await voice.preflight().catch((err) => fail(err.message));
       const { token, restore } = await ensureTrigger(serviceCode);
       try {
-        failed = await runTests(serviceCode, token);
+        failed = await runTests(serviceCode, token, voice);
+      } catch (err) {
+        log(`✗ ${err.message}`);
+        failed = Math.max(failed, 1);
       } finally {
         if (restore) await restoreTrigger(serviceCode, restore);
         else if (spec.http_trigger?.keep) {
@@ -741,6 +768,7 @@ function offlinePlan() {
   log(`  → Configuración con el modelo ${JSON.stringify(spec.model || "(primer proveedor)")}`);
   log(`  → Agente "${spec.name}"${spec.channel ? ` desplegado en el canal ${spec.channel}` : ""}`);
   for (const n of INTEGRATIONS.notes) log(`  → Integración ${n}`);
+  if (flags.voice || spec.testing?.voice?.enabled) log("  → Pruebas por voz con Piper");
   log(`  → ${spec.publish === false ? "Sin publicar" : "Publicar"}`);
   log(`  → Pruebas: ${TESTS.length} (${TESTS.filter((t) => t.expect).length} con expectativa)`);
 }
@@ -809,7 +837,18 @@ function validateSpec(s) {
   if (testing !== undefined) {
     if (!testing || typeof testing !== "object") errors.push("testing debe ser un objeto");
     else {
-      for (const k of Object.keys(testing)) if (!["runs", "pass_threshold"].includes(k)) errors.push(`testing.${k}: campo desconocido`);
+      for (const k of Object.keys(testing)) if (!["runs", "pass_threshold", "voice"].includes(k)) errors.push(`testing.${k}: campo desconocido`);
+      const v = testing.voice;
+      if (v !== undefined) {
+        const keys = ["enabled", "piper_url", "voice", "speed", "stt_url_env", "language", "out_dir", "strict"];
+        if (!v || typeof v !== "object") errors.push("testing.voice debe ser un objeto");
+        else {
+          for (const k of Object.keys(v)) if (!keys.includes(k)) errors.push(`testing.voice.${k}: campo desconocido`);
+          if (v.piper_url !== undefined && !/^https?:\/\//.test(v.piper_url)) errors.push("testing.voice.piper_url debe empezar por http(s)://");
+          if (v.speed !== undefined && !(v.speed > 0 && v.speed <= 3)) errors.push("testing.voice.speed va de 0 a 3");
+          if (v.stt_url_env !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.stt_url_env)) errors.push("testing.voice.stt_url_env es el nombre de una variable de entorno");
+        }
+      }
       if (testing.runs !== undefined && !(Number.isInteger(testing.runs) && testing.runs >= 1 && testing.runs <= 10)) errors.push("testing.runs es un entero de 1 a 10");
       if (testing.pass_threshold !== undefined && !(Number(testing.pass_threshold) > 0)) errors.push("testing.pass_threshold es una fracción (0.67) o un número de corridas (2)");
     }
