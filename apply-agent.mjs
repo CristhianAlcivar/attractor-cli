@@ -32,6 +32,7 @@ import {
   configurationCodeOf,
 } from "./lib/api.mjs";
 import { writeVerified, mergeIntegrations } from "./lib/write.mjs";
+import { validateIntegrationsSpec, resolveIntegrations, diffIntegrations } from "./lib/integrations.mjs";
 
 const args = process.argv.slice(2);
 const profileIdx = args.findIndex((a) => a === "--profile" || a.startsWith("--profile="));
@@ -77,6 +78,13 @@ const WRITE_VERIFY_DELAY_MS = Number(process.env.ATTRACTOR_VERIFY_DELAY_MS ?? 20
 
 validateSpec(spec);
 const TESTS = normalizeTests(spec);
+
+// Integraciones: la key de Maps sale del entorno (api_key_env). Nunca se imprime.
+const INTEGRATIONS = resolveIntegrations(spec.integrations, process.env);
+if (INTEGRATIONS.errors.length) {
+  if (DRY_RUN) for (const e of INTEGRATIONS.errors) console.log(`⚠ ${e}`);
+  else fail(INTEGRATIONS.errors.join("\n  "));
+}
 
 if (!DRY_RUN && !HAS_CREDENTIALS) {
   const missing = ["ATTRACTOR_BASE_URL", "ATTRACTOR_CLIENT_ID", "ATTRACTOR_CLIENT_SECRET"]
@@ -476,7 +484,8 @@ async function putService(service, patch) {
 }
 
 async function createService(configurationCode, kbs) {
-  const data = await mutate(`Agente "${spec.name}": crear${spec.channel ? " y desplegar en el canal" : ""}`, () =>
+  const extras = [spec.channel && "desplegar en el canal", ...INTEGRATIONS.notes].filter(Boolean);
+  const data = await mutate(`Agente "${spec.name}": crear${extras.length ? ` (${extras.join("; ")})` : ""}`, () =>
     api("POST", "/service", {
       json: {
         name: spec.name,
@@ -485,6 +494,7 @@ async function createService(configurationCode, kbs) {
         status: 1,
         kbs: (kbs || []).filter((c) => c !== NEW),
         ...(spec.channel ? { channel: spec.channel } : {}),
+        ...(INTEGRATIONS.patch ? { integrations: INTEGRATIONS.patch } : {}),
       },
     }));
   return data === NEW ? NEW : (data.service?.code || findCode(data));
@@ -503,6 +513,15 @@ async function updateService(service, kbs) {
     if (JSON.stringify(have) !== JSON.stringify(want)) {
       diffs.push("base de conocimiento");
       patch.kbs = want.filter((c) => c !== NEW);
+    }
+  }
+  if (INTEGRATIONS.patch) {
+    const intgDiffs = diffIntegrations(service.integrations, INTEGRATIONS.patch);
+    if (intgDiffs.length) {
+      diffs.push(...intgDiffs);
+      patch.integrations = INTEGRATIONS.patch;
+    } else {
+      log(`· Integraciones: sin cambios (${INTEGRATIONS.notes.join("; ")})`);
     }
   }
   if (spec.channel && !(service.channels || []).some((c) => c.code === spec.channel)) {
@@ -685,6 +704,7 @@ function offlinePlan() {
   log(`  → Prompt "${spec.name}" — objetivo: ${spec.objective}`);
   log(`  → Configuración con el modelo ${JSON.stringify(spec.model || "(primer proveedor)")}`);
   log(`  → Agente "${spec.name}"${spec.channel ? ` desplegado en el canal ${spec.channel}` : ""}`);
+  for (const n of INTEGRATIONS.notes) log(`  → Integración ${n}`);
   log(`  → ${spec.publish === false ? "Sin publicar" : "Publicar"}`);
   log(`  → Pruebas: ${TESTS.length} (${TESTS.filter((t) => t.expect).length} con expectativa)`);
 }
@@ -699,7 +719,7 @@ function validateSpec(s) {
   const allowed = new Set([
     "$schema", "name", "description", "objective", "instructions", "tone", "language", "constraints",
     "initial_message", "scope_guard", "conversation_close_minutes", "max_tokens", "model",
-    "temperature", "timezone", "knowledge_base", "tools", "channel", "publish", "http_trigger",
+    "temperature", "timezone", "knowledge_base", "tools", "integrations", "channel", "publish", "http_trigger",
     "tests", "test_messages",
   ]);
   for (const k of Object.keys(s)) if (!allowed.has(k)) errors.push(`campo desconocido: ${k}`);
@@ -734,6 +754,8 @@ function validateSpec(s) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(f?.name || "")) errors.push(`${at}: campo con nombre inválido "${f?.name}"`);
     }
   }
+
+  errors.push(...validateIntegrationsSpec(s.integrations));
 
   for (const [i, t] of (s.tests || []).entries()) {
     if (!t?.message) errors.push(`tests[${i}]: falta message`);

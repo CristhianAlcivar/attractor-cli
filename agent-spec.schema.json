@@ -53,6 +53,36 @@
       "items": { "$ref": "#/$defs/tool" }
     },
 
+    "integrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Integraciones del agente. Se combinan con las que ya tenga: no se borran las demás ni el disparador HTTP.",
+      "properties": {
+        "google_maps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["api_key_env"],
+          "description": "Google Maps Platform: geocodificar, lugares cercanos, el más cercano, rutas y enlaces de Maps.",
+          "properties": {
+            "api_key_env": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Variable de entorno (o del .env junto a la spec) con la API key (AIza…). La key nunca va en la spec." },
+            "region": { "type": "string", "pattern": "^[a-zA-Z]{2}$", "description": "País para sesgar resultados (ISO 3166-1 alfa-2): ec, co, mx…" },
+            "language": { "type": "string", "description": "Idioma de los resultados (BCP-47): es, es-419…" },
+            "rate_limit_per_minute": { "type": "integer", "minimum": 1, "maximum": 6000, "description": "Tope de consultas por minuto por organización y herramienta." }
+          }
+        },
+        "scrape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allow_hosts"],
+          "description": "Web scraping: el agente solo lee páginas de estos dominios. Limítalo a dominios propios.",
+          "properties": {
+            "allow_hosts": { "type": "array", "minItems": 1, "items": { "type": "string", "description": "Dominio sin https:// ni ruta: tu-empresa.com o *.tu-empresa.com" } },
+            "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 }
+          }
+        }
+      }
+    },
+
     "channel": { "type": "string", "format": "uuid", "description": "Canal donde desplegarlo (GET /api/channel). Sin canal no se despliega." },
     "publish": { "type": "boolean", "default": true },
     "http_trigger": {
