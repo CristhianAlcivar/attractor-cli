@@ -6,11 +6,13 @@
 //   acciones de datos → base de conocimiento → prompt → configuración → agente → publicar → probar
 //
 // Uso:
-//   node apply-agent.mjs <spec.json> [--dry-run] [--test-only]
+//   node apply-agent.mjs <spec.json> [--dry-run] [--test-only] [--runs N]
 //
 //   --dry-run    Muestra el plan sin escribir nada. Con credenciales compara contra lo que hay
 //                en la plataforma; sin ellas muestra el plan de creación.
 //   --test-only  No cambia nada: solo corre las pruebas contra la versión publicada.
+//   --runs N     Repite las pruebas N veces; un caso pasa si aprueba pass_threshold de ellas
+//                (por defecto 2 de 3).
 //
 // Códigos de salida: 0 todo bien · 1 error · 2 alguna prueba falló o algo no quedó enlazado.
 //
@@ -35,17 +37,21 @@ import { writeVerified, mergeIntegrations } from "./lib/write.mjs";
 import { validateIntegrationsSpec, resolveIntegrations, diffIntegrations } from "./lib/integrations.mjs";
 import { applyDataTables, loadTable, validateDataTablesSpec } from "./lib/tables.mjs";
 import { verifyLinks } from "./lib/verify.mjs";
+import { parseArgs } from "./lib/args.mjs";
+import { createToolLogLookup, extractToolCalls, runSuite, triggerPlan, DEFAULT_PASS_THRESHOLD } from "./lib/testing.mjs";
 
-const args = process.argv.slice(2);
-const profileIdx = args.findIndex((a) => a === "--profile" || a.startsWith("--profile="));
-const PROFILE = profileIdx < 0 ? undefined
-  : args[profileIdx].includes("=") ? args[profileIdx].split("=")[1] : args[profileIdx + 1];
-const specPath = args.find((a, i) => !a.startsWith("--") && !(profileIdx >= 0 && i === profileIdx + 1 && !args[profileIdx].includes("=")));
-const DRY_RUN = args.includes("--dry-run");
-const TEST_ONLY = args.includes("--test-only");
+const { flags, positional } = parseArgs(process.argv.slice(2), ["profile", "runs"]);
+const PROFILE = typeof flags.profile === "string" ? flags.profile : undefined;
+const [specPath] = positional;
+const DRY_RUN = Boolean(flags["dry-run"]);
+const TEST_ONLY = Boolean(flags["test-only"]);
 
 if (!specPath) {
-  console.error("Uso: node apply-agent.mjs <spec.json> [--dry-run] [--test-only] [--profile <nombre>]");
+  console.error("Uso: node apply-agent.mjs <spec.json> [--dry-run] [--test-only] [--runs N] [--profile <nombre>]");
+  process.exit(1);
+}
+if (flags.runs !== undefined && !(Number.isInteger(Number(flags.runs)) && Number(flags.runs) >= 1 && Number(flags.runs) <= 10)) {
+  console.error("✗ --runs es un entero de 1 a 10");
   process.exit(1);
 }
 
@@ -555,75 +561,64 @@ async function publish(serviceCode) {
 
 // ---------------------------------------------------------------- Pruebas
 
-// Enciende el disparador HTTP si hace falta. Devuelve el token y si hay que apagarlo al final.
+// Enciende el disparador HTTP si está apagado, sin token válido o en modo callback (las pruebas
+// necesitan la respuesta en la misma llamada). Devuelve el token y cómo dejarlo al terminar.
 async function ensureTrigger(serviceCode) {
   const service = await readService(api, serviceCode);
-  const current = service.integrations?.http_trigger;
-  if (current?.enabled && String(current.token || "").length >= 16) {
-    return { token: current.token, restore: null };
-  }
-  const token = String(current?.token || "").length >= 16 ? current.token : randomBytes(24).toString("hex");
-  const trigger = { enabled: true, token, response_mode: "sync" };
-  await putService(service, { integrations: { http_trigger: trigger } });
-  log("· Disparador HTTP encendido para las pruebas");
-  return { token, restore: spec.http_trigger?.keep ? null : { ...trigger, enabled: false } };
+  const p = triggerPlan(service.integrations?.http_trigger, {
+    keep: Boolean(spec.http_trigger?.keep), newToken: () => randomBytes(24).toString("hex"),
+  });
+  if (!p.change) return { token: p.token, restore: null };
+  await putService(service, { integrations: { http_trigger: p.change } });
+  log(`· Disparador HTTP encendido para las pruebas (${p.why})`);
+  return { token: p.token, restore: p.restore };
 }
 
-async function disableTrigger(serviceCode, trigger) {
+async function restoreTrigger(serviceCode, trigger) {
   const service = await readService(api, serviceCode);
   await putService(service, { integrations: { http_trigger: trigger } });
-  log("· Disparador HTTP apagado (usa http_trigger.keep para dejarlo encendido)");
+  log(trigger.enabled
+    ? "· Disparador HTTP devuelto a su configuración anterior"
+    : "· Disparador HTTP apagado (usa http_trigger.keep para dejarlo encendido)");
 }
 
-const REFUSAL = /\b(no (tengo|cuento con|dispongo|encuentro|encontr[eé]|s[eé]|puedo|manejo)|no est[aá] (en|dentro)|fuera de (mi|lo que)|no hay informaci[oó]n|sin informaci[oó]n|un asesor|una persona del equipo|i (don't|do not) (have|know)|not able to)\b/i;
-
-function checkExpectations(reply, expect = {}) {
-  const errors = [];
-  const text = fold(reply);
-  for (const s of expect.contains || []) {
-    if (!text.includes(fold(s))) errors.push(`debía contener «${s}»`);
+// Un turno por el disparador. El disparador no exige JWT: se autentica con X-Trigger-Token.
+async function triggerTurn(serviceCode, token, message, userId) {
+  const startedAt = new Date().toISOString();
+  let res;
+  let body = {};
+  try {
+    res = await fetch(`${BASE}/api/agents/${serviceCode}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Trigger-Token": token },
+      body: JSON.stringify({ message, user_id: userId }),
+    });
+    body = await res.json().catch(() => ({}));
+  } catch (err) {
+    return { reply: null, error: err.message, startedAt };
   }
-  if (expect.contains_any?.length && !expect.contains_any.some((s) => text.includes(fold(s)))) {
-    errors.push(`debía contener alguna de: ${expect.contains_any.map((s) => `«${s}»`).join(", ")}`);
-  }
-  for (const s of expect.not_contains || []) {
-    if (text.includes(fold(s))) errors.push(`no debía contener «${s}»`);
-  }
-  if (expect.matches && !new RegExp(expect.matches, "i").test(reply)) {
-    errors.push(`no coincide con /${expect.matches}/i`);
-  }
-  if (expect.refuses === true && !REFUSAL.test(reply)) errors.push("debía reconocer que no sabe o declinar");
-  if (expect.refuses === false && REFUSAL.test(reply)) errors.push("no debía declinar");
-  if (expect.max_chars && reply.length > expect.max_chars) {
-    errors.push(`demasiado larga (${reply.length} > ${expect.max_chars} caracteres)`);
-  }
-  return errors;
+  const data = body.data || {};
+  return {
+    reply: data.reply?.text ?? null,
+    error: body.error?.message ?? body.error ?? (data.status === "human_in_charge" ? "un asesor tiene la conversación" : `HTTP ${res.status}`),
+    toolCalls: extractToolCalls(data),
+    conversationId: data.conversation_id ?? null,
+    startedAt,
+  };
 }
 
 async function runTests(serviceCode, token) {
-  const userId = `prueba-${randomBytes(3).toString("hex")}`;
-  let failed = 0;
-  log(`\nPruebas (${TESTS.length}):`);
-  for (const t of TESTS) {
-    const res = await fetch(`${BASE}/api/agents/${serviceCode}/trigger`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Trigger-Token": token },
-      body: JSON.stringify({ message: t.message, user_id: userId }),
-    });
-    const body = await res.json().catch(() => ({}));
-    const reply = body.data?.reply?.text;
-    const errors = reply == null
-      ? [`sin respuesta: ${body.error?.message ?? body.error ?? `HTTP ${res.status}`}`]
-      : checkExpectations(reply, t.expect);
-    const status = !t.expect ? "·" : errors.length ? "✗" : "✓";
-    if (t.expect && errors.length) failed++;
-    log(`\n  ${status} Cliente: ${t.message}`);
-    log(`    ${spec.name}: ${reply ?? "(nada)"}`);
-    for (const e of t.expect ? errors : []) log(`    ✗ ${e}`);
-  }
-  const checked = TESTS.filter((t) => t.expect).length;
-  log(`\n${checked - failed}/${checked} pruebas con expectativa pasaron` +
-    (TESTS.length > checked ? ` (${TESTS.length - checked} sin expectativa, solo para leer)` : ""));
+  const runs = Number(flags.runs ?? spec.testing?.runs ?? 1);
+  const { failed } = await runSuite({
+    tests: TESTS,
+    runs,
+    passThreshold: spec.testing?.pass_threshold ?? DEFAULT_PASS_THRESHOLD,
+    trigger: (message, userId) => triggerTurn(serviceCode, token, message, userId),
+    lookupTools: createToolLogLookup(api, { serviceCode, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) }),
+    newUserId: () => `prueba-${randomBytes(4).toString("hex")}`,
+    agentName: spec.name,
+    log,
+  });
   return failed;
 }
 
@@ -715,7 +710,7 @@ async function main() {
       try {
         failed = await runTests(serviceCode, token);
       } finally {
-        if (restore) await disableTrigger(serviceCode, restore);
+        if (restore) await restoreTrigger(serviceCode, restore);
         else if (spec.http_trigger?.keep) {
           log(`· Disparador HTTP encendido: POST ${BASE}/api/agents/${serviceCode}/trigger (token en el panel)`);
         }
@@ -761,7 +756,7 @@ function validateSpec(s) {
     "$schema", "name", "description", "objective", "instructions", "tone", "language", "constraints",
     "initial_message", "scope_guard", "conversation_close_minutes", "max_tokens", "model",
     "temperature", "timezone", "knowledge_base", "data_tables", "tools", "integrations", "channel", "publish", "http_trigger",
-    "tests", "test_messages",
+    "tests", "test_messages", "testing",
   ]);
   for (const k of Object.keys(s)) if (!allowed.has(k)) errors.push(`campo desconocido: ${k}`);
 
@@ -804,13 +799,29 @@ function validateSpec(s) {
     if (t?.expect?.matches) {
       try { new RegExp(t.expect.matches); } catch { errors.push(`tests[${i}]: matches no es una regex válida`); }
     }
+    for (const name of [].concat(t?.expect?.called_tool ?? [])) {
+      if (typeof name !== "string" || !name) errors.push(`tests[${i}]: called_tool es el nombre de una herramienta (o una lista)`);
+    }
+    if (t?.new_conversation !== undefined && typeof t.new_conversation !== "boolean") errors.push(`tests[${i}]: new_conversation es true o false`);
+    if (t?.pass_threshold !== undefined && !(Number(t.pass_threshold) > 0)) errors.push(`tests[${i}]: pass_threshold es una fracción (0.67) o un número de corridas (2)`);
+  }
+  const testing = s.testing;
+  if (testing !== undefined) {
+    if (!testing || typeof testing !== "object") errors.push("testing debe ser un objeto");
+    else {
+      for (const k of Object.keys(testing)) if (!["runs", "pass_threshold"].includes(k)) errors.push(`testing.${k}: campo desconocido`);
+      if (testing.runs !== undefined && !(Number.isInteger(testing.runs) && testing.runs >= 1 && testing.runs <= 10)) errors.push("testing.runs es un entero de 1 a 10");
+      if (testing.pass_threshold !== undefined && !(Number(testing.pass_threshold) > 0)) errors.push("testing.pass_threshold es una fracción (0.67) o un número de corridas (2)");
+    }
   }
 
   if (errors.length) fail(`La spec no es válida:\n  - ${errors.join("\n  - ")}`);
 }
 
 function normalizeTests(s) {
-  const tests = (s.tests || []).map((t) => ({ message: t.message, expect: t.expect }));
+  const tests = (s.tests || []).map((t) => ({
+    message: t.message, expect: t.expect, new_conversation: t.new_conversation, pass_threshold: t.pass_threshold,
+  }));
   for (const m of s.test_messages || []) tests.push({ message: m });
   return tests;
 }

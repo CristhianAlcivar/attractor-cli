@@ -104,6 +104,15 @@
       "description": "Casos que se corren contra la versión publicada. Si alguno falla, el script termina con código 2.",
       "items": { "$ref": "#/$defs/test" }
     },
+    "testing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cómo se corren las pruebas.",
+      "properties": {
+        "runs": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1, "description": "Corridas de la suite (--runs lo sobrescribe). Cada corrida usa una conversación nueva." },
+        "pass_threshold": { "type": "number", "exclusiveMinimum": 0, "default": 0.6667, "description": "Mínimo para que un caso pase: fracción de las corridas (por defecto 2 de 3) o número de corridas." }
+      }
+    },
     "test_messages": {
       "type": "array",
       "items": { "type": "string" },
@@ -180,6 +189,8 @@
       "additionalProperties": false,
       "properties": {
         "message": { "type": "string" },
+        "new_conversation": { "type": "boolean", "default": false, "description": "Desde este caso se usa un user_id nuevo (conversación nueva). Sin esto, los casos de una corrida comparten conversación." },
+        "pass_threshold": { "type": "number", "exclusiveMinimum": 0, "description": "Mínimo para pasar con --runs: fracción (0.67) o número de corridas (2). Sobrescribe testing.pass_threshold." },
         "expect": {
           "type": "object",
           "additionalProperties": false,
@@ -189,7 +200,11 @@
             "not_contains": { "type": "array", "items": { "type": "string" } },
             "matches": { "type": "string", "description": "Expresión regular (flag i)." },
             "refuses": { "type": "boolean", "description": "true: debe reconocer que no tiene la información o declinar." },
-            "max_chars": { "type": "integer", "minimum": 1 }
+            "max_chars": { "type": "integer", "minimum": 1 },
+            "called_tool": {
+              "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" }, "minItems": 1 }],
+              "description": "Herramienta(s) que el agente debía usar. Se verifica con las trazas del disparador o, si no las trae, con GET /api/tool-logs; si ninguna está disponible queda como «no verificable» (aviso)."
+            }
           }
         }
       }
