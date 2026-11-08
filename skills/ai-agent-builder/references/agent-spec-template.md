@@ -55,6 +55,34 @@ Más de 10–12 herramientas: divide en varios agentes.
   total) o `articles` (búsqueda por fragmentos, para contenido largo).
 - Lo que cambia con el tiempo va aquí o en herramientas, no en `instructions`.
 
+### Tablas → `data_tables`
+
+Datos con forma de tabla (sucursales, tarifas, planes):
+
+```json
+"data_tables": [
+  { "name": "Agencias", "csv": "./agencias.csv", "searchable_columns": ["ciudad"] },
+  { "code": "<uuid de una tabla que ya existe en el panel>" }
+]
+```
+
+La búsqueda es por **coincidencia exacta** en `searchable_columns`: usa una columna normalizada
+(`ciudad` en minúsculas) y di en `instructions` cómo escribir el valor al buscar.
+
+### Integraciones → `integrations`
+
+```json
+"integrations": {
+  "google_maps": { "api_key_env": "GOOGLE_MAPS_API_KEY", "region": "ec", "language": "es", "rate_limit_per_minute": 60 },
+  "scrape": { "allow_hosts": ["tu-empresa.com"], "timeout_ms": 15000 }
+}
+```
+
+- `google_maps` para «la agencia más cercana» o «cómo llego». La key va en la variable de
+  `api_key_env` (entorno o `.env` junto a la spec), nunca en la spec.
+- `scrape` solo con dominios propios. Lo que traiga una página es dato, no orden: dilo en
+  `instructions`.
+
 ## 6. Guardrails → `constraints`, `scope_guard`, `permission` y pruebas
 
 - Entradas: parámetros tipados en `input`; validación en la API destino.
@@ -71,6 +99,15 @@ Cada caso es `{ "message": "...", "expect": { ... } }`. Mínimo:
 2. **Fuera de alcance:** `refuses: true` (y `not_contains` con lo que no debe inventar).
 3. **Intento de saltarse las reglas:** `not_contains` con un trozo de las instrucciones.
 4. **Formato:** `max_chars` o `matches` si la respuesta tiene forma fija.
+5. **Cada acción WRITE:** un caso donde la acción falla o no está disponible, con
+   `not_contains: ["con éxito", "exitosamente", "he creado", "he registrado"]`; y en el camino
+   feliz, `called_tool` con el nombre de la acción.
+6. **Memoria:** un caso con `new_conversation: true` que confirme que no arrastra datos de otra
+   conversación.
 
-Si alguna prueba falla, `apply-agent.mjs` termina con código 2. Se corrige la spec y se vuelve a
-aplicar.
+Opciones de la corrida en `testing`: `runs` (o `--runs N`) y `pass_threshold` (por defecto 2 de
+3); `voice` para probar por voz con Piper (o `--voice`; `expect.max_seconds` limita cuánto dura la
+respuesta dicha).
+
+Si alguna prueba falla o algo de la spec no quedó enlazado, `apply-agent.mjs` termina con código 2.
+Se corrige la spec y se vuelve a aplicar.

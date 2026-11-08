@@ -12,6 +12,7 @@
   "files": [
     "cli.mjs",
     "apply-agent.mjs",
+    "doctor.mjs",
     "profiles.mjs",
     "lib/",
     "agent-spec.schema.json",
