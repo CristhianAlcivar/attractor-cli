@@ -6,10 +6,14 @@
   "bin": {
     "attractor": "cli.mjs"
   },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "files": [
     "cli.mjs",
     "apply-agent.mjs",
     "profiles.mjs",
+    "lib/",
     "agent-spec.schema.json",
     "example-spec.json",
     "skills/",

@@ -27,6 +27,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { applyProfileToEnv, normalizeBaseUrl } from "./profiles.mjs";
+import {
+  createClient, tokenOrganization, readService, serviceBody, findServiceByName as findService,
+  configurationCodeOf,
+} from "./lib/api.mjs";
 
 const args = process.argv.slice(2);
 const profileIdx = args.findIndex((a) => a === "--profile" || a.startsWith("--profile="));
@@ -80,54 +84,15 @@ if (!DRY_RUN && !HAS_CREDENTIALS) {
 
 // ---------------------------------------------------------------- HTTP
 
-let accessToken = null;
+const client = createClient({ base: BASE, clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, workspace: WORKSPACE, log });
+const api = (...a) => client.api(...a);
 
 async function getToken() {
-  const res = await fetch(`${BASE}/api/oauth/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: "Basic " + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64"),
-    },
-    body: "grant_type=client_credentials",
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) fail(`No se pudo obtener el token (${res.status}): ${body.error_description || body.error || ""}`);
-  accessToken = body.access_token;
-}
-
-async function api(method, path, { json, form, headers = {}, retry = true } = {}) {
-  const init = {
-    method,
-    headers: { Authorization: `Bearer ${accessToken}`, ...(WORKSPACE ? { "X-Workspace-Code": WORKSPACE } : {}), ...headers },
-  };
-  if (json !== undefined) {
-    init.headers["Content-Type"] = "application/json";
-    init.body = JSON.stringify(json);
-  } else if (form) {
-    init.body = form; // fetch pone el boundary del multipart
+  try {
+    await client.getToken();
+  } catch (err) {
+    fail(err.message);
   }
-  const res = await fetch(`${BASE}/api${path}`, init);
-  if (res.status === 429 && retry) {
-    const wait = Number(res.headers.get("retry-after") || 30);
-    log(`  · límite de peticiones; espero ${wait}s`);
-    await new Promise((r) => setTimeout(r, wait * 1000));
-    return api(method, path, { json, form, headers, retry: false });
-  }
-  if (res.status === 401 && retry) {
-    await getToken();
-    return api(method, path, { json, form, headers, retry: false });
-  }
-  const text = await res.text();
-  let body;
-  try { body = JSON.parse(text); } catch { body = { raw: text }; }
-  if (!res.ok || body.success === false) {
-    const msg = body.error?.message || body.error || body.message || body.raw || "";
-    const err = new Error(`${method} /api${path} → ${res.status}: ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
-    err.status = res.status;
-    throw err;
-  }
-  return body.data ?? body;
 }
 
 // Toda escritura pasa por aquí: en --dry-run solo se anota en el plan.
@@ -149,8 +114,9 @@ async function mutate(description, fn) {
 // con la organización que trae el propio token.
 async function resolveWorkspace() {
   const wanted = WORKSPACE;
-  const organization = JSON.parse(Buffer.from(accessToken.split(".")[1], "base64url").toString()).organization;
+  const organization = tokenOrganization(client.state.token);
   WORKSPACE = "";
+  client.state.workspace = "";
   const data = await api("GET", `/workspaces?org_code=${organization}&page=1&limit=100`);
   const list = data.workspaces || [];
   const ws = wanted
@@ -162,6 +128,7 @@ async function resolveWorkspace() {
       : "La organización no tiene workspaces.");
   }
   WORKSPACE = ws.code;
+  client.state.workspace = ws.code;
   log(`· Workspace: ${ws.name} (${ws.code})`);
 }
 
@@ -185,10 +152,7 @@ async function resolveModel() {
   return model.code;
 }
 
-async function findServiceByName(name) {
-  const data = await api("GET", `/service?page=1&limit=50&search=${encodeURIComponent(name)}`);
-  return (data.services || []).find((s) => s.name === name) || null;
-}
+const findServiceByName = (name) => findService(api, name);
 
 async function findKbByName(name) {
   const data = await api("GET", `/knowledge?page=1&limit=50&search=${encodeURIComponent(name)}`);
@@ -475,19 +439,6 @@ async function updateConfiguration(cfg) {
 
 // ---------------------------------------------------------------- Agente (servicio)
 
-// PUT /service reemplaza el cuerpo: siempre se reenvía completo, partiendo de lo guardado.
-function serviceBody(service, patch = {}) {
-  return {
-    name: service.name,
-    configuration: service.configuration?.code ?? service.configuration,
-    status: service.status ?? 1,
-    description: service.description ?? "",
-    kbs: (service.kbs || []).map((k) => k.code ?? k),
-    integrations: service.integrations ?? undefined,
-    ...patch,
-  };
-}
-
 async function createService(configurationCode, kbs) {
   const data = await mutate(`Agente "${spec.name}": crear${spec.channel ? " y desplegar en el canal" : ""}`, () =>
     api("POST", "/service", {
@@ -540,7 +491,7 @@ async function publish(serviceCode) {
 
 // Enciende el disparador HTTP si hace falta. Devuelve el token y si hay que apagarlo al final.
 async function ensureTrigger(serviceCode) {
-  const service = await api("GET", `/service/${serviceCode}`);
+  const service = await readService(api, serviceCode);
   const current = service.integrations?.http_trigger;
   if (current?.enabled && String(current.token || "").length >= 16) {
     return { token: current.token, restore: null };
@@ -555,7 +506,7 @@ async function ensureTrigger(serviceCode) {
 }
 
 async function disableTrigger(serviceCode, trigger) {
-  const service = await api("GET", `/service/${serviceCode}`);
+  const service = await readService(api, serviceCode);
   await api("PUT", `/service/${serviceCode}`, {
     json: serviceBody(service, { integrations: { ...(service.integrations || {}), http_trigger: trigger } }),
   });
@@ -642,8 +593,8 @@ async function main() {
       changed = true;
     } else {
       log(`· El agente "${spec.name}" existe (${service.code}): comparo con la spec.`);
-      service = await api("GET", `/service/${service.code}`);
-      const cfg = await api("GET", `/configuration/${service.configuration?.code}`);
+      service = await readService(api, service.code);
+      const cfg = await api("GET", `/configuration/${configurationCodeOf(service)}`);
       const promptCode = cfg.prompts?.[0]?.code;
       if (!promptCode) fail("La configuración del agente no tiene prompt; revísalo en el panel.");
       changed = (await updatePrompt(promptCode, dataActionCodes)) || changed;
