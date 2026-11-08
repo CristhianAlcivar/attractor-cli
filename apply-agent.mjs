@@ -12,7 +12,7 @@
 //                en la plataforma; sin ellas muestra el plan de creación.
 //   --test-only  No cambia nada: solo corre las pruebas contra la versión publicada.
 //
-// Códigos de salida: 0 todo bien · 1 error · 2 alguna prueba falló.
+// Códigos de salida: 0 todo bien · 1 error · 2 alguna prueba falló o algo no quedó enlazado.
 //
 // Variables de entorno (o archivo .env junto al spec):
 //   ATTRACTOR_BASE_URL       p. ej. https://attractoragents.com  (sin /api)
@@ -34,6 +34,7 @@ import {
 import { writeVerified, mergeIntegrations } from "./lib/write.mjs";
 import { validateIntegrationsSpec, resolveIntegrations, diffIntegrations } from "./lib/integrations.mjs";
 import { applyDataTables, loadTable, validateDataTablesSpec } from "./lib/tables.mjs";
+import { verifyLinks } from "./lib/verify.mjs";
 
 const args = process.argv.slice(2);
 const profileIdx = args.findIndex((a) => a === "--profile" || a.startsWith("--profile="));
@@ -638,6 +639,7 @@ async function main() {
   let service = await findServiceByName(spec.name);
   let serviceCode = service?.code;
   let changed = false;
+  let links = null; // lo que la spec enlaza, para verificarlo al final
 
   if (TEST_ONLY) {
     if (!service) fail(`No existe el agente "${spec.name}" en este workspace.`);
@@ -647,6 +649,12 @@ async function main() {
     const tableCodes = await applyDataTables(spec.data_tables, {
       api, workspace: WORKSPACE, specDir, mutate, log, NEW, offline: !HAS_CREDENTIALS,
     }).catch((err) => fail(err.message));
+    links = {
+      tools: (spec.tools || []).map((t, i) => ({ name: t.name, code: dataActionCodes?.[i] })),
+      tables: (spec.data_tables || []).map((t, i) => ({ label: t.name || t.code, code: tableCodes?.[i] })),
+      kbs: (kbs || []).filter((c) => c !== NEW),
+      integrations: INTEGRATIONS.patch,
+    };
 
     if (!service) {
       log(`· El agente "${spec.name}" no existe: se crea.`);
@@ -683,6 +691,20 @@ async function main() {
     return;
   }
 
+  // Relee el agente y confirma que todo lo de la spec quedó enlazado.
+  let missing = [];
+  if (links) {
+    const result = await verifyLinks(api, serviceCode, links);
+    missing = result.missing;
+    if (missing.length) {
+      log(`\n✗ No quedó enlazado: ${missing.join("; ")}.`);
+      log("  El agente no tiene esas herramientas o datos aunque la spec los declare: puede decir que");
+      log("  los usó e inventar el resultado. Vuelve a aplicar la spec o enlázalos en el panel.");
+    } else if (result.linked.length) {
+      log(`· Verificado: ${result.linked.length} enlace(s) en su lugar (${result.linked.join("; ")})`);
+    }
+  }
+
   let failed = 0;
   if (TESTS.length) {
     const published = spec.publish !== false || (service && service.publishedVersion != null);
@@ -704,10 +726,9 @@ async function main() {
   log("\nListo.");
   log(`  Agente: ${serviceCode}`);
   log(`  Probar: ${BASE}/agents/${serviceCode}/playground`);
-  if (failed) {
-    log(`\n✗ ${failed} prueba(s) fallaron. Ajusta la spec y vuelve a aplicarla.`);
-    process.exit(2);
-  }
+  if (failed) log(`\n✗ ${failed} prueba(s) fallaron. Ajusta la spec y vuelve a aplicarla.`);
+  if (missing.length) log(`\n✗ Falta enlazar: ${missing.join("; ")}`);
+  if (failed || missing.length) process.exit(2);
 }
 
 function offlinePlan() {
