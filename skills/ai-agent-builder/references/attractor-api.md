@@ -43,7 +43,7 @@ KB se crean antes; las acciones se enlazan en el prompt y la KB en el servicio.
 | 3d | Tabla de datos | `POST /api/data-tables` + `POST /api/data-tables/:code/rows` | `{ name, columns:[{key,label,type,is_key}], agent_access }` y `{ rows:[{…}], mode:"replace" }` | `data.dtb_code` |
 | 6 | Agente | `POST /api/service` | `{ name, configuration, kbs:[kb], channel?, integrations? }` | `data.service.code` |
 | 7 | Publicar | `POST /api/service/:code/publish` | `{}` | `data.version` |
-| 8 | Probar | `POST /api/agents/:code/trigger` (sin JWT, `X-Trigger-Token`) | `{ message, user_id? }` | `data.reply.text` |
+| 8 | Probar | `POST /api/agents/:code/trigger` (sin JWT, `X-Trigger-Token`) | `{ message, user_id?, test: true }` | `data.reply.text` |
 
 ## Actualizar un agente existente
 

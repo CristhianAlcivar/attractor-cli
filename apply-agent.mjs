@@ -580,7 +580,8 @@ async function triggerTurn(serviceCode, token, message, userId) {
     res = await fetch(`${BASE}/api/agents/${serviceCode}/trigger`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Trigger-Token": token },
-      body: JSON.stringify({ message, user_id: userId }),
+      // test: la conversación queda como prueba (no cuenta en producción ni en facturación).
+      body: JSON.stringify({ message, user_id: userId, test: true }),
     });
     body = await res.json().catch(() => ({}));
   } catch (err) {
